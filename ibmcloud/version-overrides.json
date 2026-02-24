@@ -1,0 +1,82 @@
+{
+  "licenses": [
+    {
+      "id": "apache_license_2_0",
+      "name": "Apache License 2.0",
+      "url": "https://github.com/traefik/hub/blob/main/LICENSE"
+    }
+  ],
+  "pre_install": [],
+  "configuration": [
+    {
+      "key": "cluster",
+      "type": "string",
+      "default_value": "",
+      "required": true,
+      "hidden": false,
+      "custom_config": {
+        "type": "cluster",
+        "grouping": "target",
+        "grouping_index": 1,
+        "config_constraints": {
+          "clusterType": "kubernetes"
+        }
+      }
+    },
+    {
+      "key": "namespace",
+      "type": "string",
+      "default_value": "",
+      "required": true,
+      "hidden": false,
+      "custom_config": {
+        "type": "cluster_namespace",
+        "grouping": "target",
+        "grouping_index": 2,
+        "config_constraints": {
+          "clusterType": "kubernetes"
+        }
+      }
+    },
+    {
+      "key": "hub.token",
+      "type": "string",
+      "default_value": "",
+      "required": true,
+      "hidden": false,
+      "description": "Traefik Hub license token. Get it from https://hub.traefik.io/"
+    },
+    {
+      "key": "hub.apimanagement.enabled",
+      "type": "boolean",
+      "default_value": true,
+      "required": false,
+      "hidden": false,
+      "description": "Enable Traefik Hub API Management"
+    },
+    {
+      "key": "image.registry",
+      "type": "string",
+      "default_value": "ghcr.io",
+      "required": false,
+      "hidden": true,
+      "description": "Traefik Hub image registry"
+    },
+    {
+      "key": "image.repository",
+      "type": "string",
+      "default_value": "traefik/traefik-hub",
+      "required": false,
+      "hidden": true,
+      "description": "Traefik Hub image repository"
+    },
+    {
+      "key": "image.tag",
+      "type": "string",
+      "default_value": "v3.19.0",
+      "required": false,
+      "hidden": false,
+      "description": "Traefik Hub image tag"
+    }
+  ]
+}
