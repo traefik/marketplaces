@@ -68,7 +68,7 @@ ibmcloud is sg-rulec "$SG_ID" outbound tcp --port-min 443 --port-max 443 --remot
 ibmcloud ks cluster config --cluster "$CLUSTER_ID"
 
 # Disable default IBM ingress ALB (Traefik Hub replaces it)
-ALB_ID=$(ibmcloud ks ingress alb ls --cluster "$CLUSTER_ID" --output json | jq -r '.[0].albID')
+ALB_ID=$(ibmcloud ks ingress alb ls --cluster "$CLUSTER_ID" --output json | jq -r '.alb[0].albID')
 ibmcloud ks ingress alb disable --alb "$ALB_ID" --cluster "$CLUSTER_ID"
 ```
 
