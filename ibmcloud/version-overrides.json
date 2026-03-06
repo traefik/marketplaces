@@ -1,0 +1,90 @@
+{
+  "licenses": [
+    {
+      "id": "apache_license_2_0",
+      "name": "Apache License 2.0",
+      "url": "https://github.com/traefik/hub/blob/main/LICENSE"
+    }
+  ],
+  "pre_install": [
+    {
+      "instructions": "Provisions a Traefik Hub workspace via hub-admin API and creates the license secret in the target namespace.",
+      "script": "#!/bin/bash\nset -eo pipefail\n\nDRY_RUN=false\nHUB_ADMIN_API=https://admin-api.hub-preview.traefik.io\nSECRET_NAME=traefik-hub-license\n\necho '==> Traefik Hub pre-install provisioning script'\necho \"    Dry-run: ${DRY_RUN}\"\necho ''\n\n# --- Step 1: Gather cluster metadata ---\necho '==> Step 1: Gathering cluster metadata'\nCLUSTER_ID=${ID}\nCLUSTER_NAME=${NAME}\nCLUSTER_REGION=${REGION}\nCLUSTER_CRN=${CRN}\nCLUSTER_RESOURCE_GROUP=${RESOURCE_GROUP_NAME}\nCLUSTER_PROVIDER=${PROVIDER}\nACCOUNT_ID=$(echo \"${CRN}\" | sed 's|.*:a/\\([^:]*\\):.*|\\1|')\necho \"    cluster_id:       ${CLUSTER_ID}\"\necho \"    cluster_name:     ${CLUSTER_NAME}\"\necho \"    region:           ${CLUSTER_REGION}\"\necho \"    resource_group:   ${CLUSTER_RESOURCE_GROUP}\"\necho \"    provider:         ${CLUSTER_PROVIDER}\"\necho \"    account_id:       ${ACCOUNT_ID}\"\necho \"    namespace:        ${JOB_NAMESPACE}\"\necho ''\n\n# --- Step 2: Extract customer info from IAM token ---\necho '==> Step 2: Extracting customer info from IAM token'\nIAM_TOKEN=$(ibmcloud iam oauth-tokens 2>/dev/null | grep 'IAM token:' | sed 's/.*Bearer //')\nif [ -z \"${IAM_TOKEN}\" ]; then\n  echo '    ERROR: Could not get IAM token'\n  exit 1\nfi\nJWT_PAYLOAD=$(echo \"${IAM_TOKEN}\" | cut -d. -f2 | sed 's/-/+/g;s/_/\\//g' | base64 -d 2>/dev/null || true)\nCUSTOMER_EMAIL=$(echo \"${JWT_PAYLOAD}\" | grep -o '\"email\":\"[^\"]*\"' | head -1 | sed 's/\"email\":\"//;s/\"$//')\nif [ -z \"${CUSTOMER_EMAIL}\" ]; then\n  CUSTOMER_EMAIL=$(echo \"${JWT_PAYLOAD}\" | grep -o '\"authn\":{[^}]*}' | grep -o '\"email\":\"[^\"]*\"' | sed 's/\"email\":\"//;s/\"$//')\nfi\nCUSTOMER_NAME=$(echo \"${JWT_PAYLOAD}\" | grep -o '\"authn\":{[^}]*}' | grep -o '\"name\":\"[^\"]*\"' | sed 's/\"name\":\"//;s/\"$//')\nCUSTOMER_IAM_ID=$(echo \"${JWT_PAYLOAD}\" | grep -o '\"authn\":{[^}]*}' | grep -o '\"iam_id\":\"[^\"]*\"' | sed 's/\"iam_id\":\"//;s/\"$//')\nACCOUNT_NAME=$(ibmcloud account show 2>/dev/null | grep 'Account Name:' | sed 's/.*Account Name:[[:space:]]*//')\nACCOUNT_TYPE=$(ibmcloud account show 2>/dev/null | grep 'Account Type:' | sed 's/.*Account Type:[[:space:]]*//')\necho \"    customer_email:   ${CUSTOMER_EMAIL}\"\necho \"    customer_name:    ${CUSTOMER_NAME}\"\necho \"    customer_iam_id:  ${CUSTOMER_IAM_ID}\"\necho \"    account_name:     ${ACCOUNT_NAME}\"\necho \"    account_type:     ${ACCOUNT_TYPE}\"\necho ''\n\n# --- Step 3: Call hub-admin provisioning endpoint ---\necho '==> Step 3: Provisioning workspace via hub-admin API'\nPROVISION_URL=${HUB_ADMIN_API}/marketplace/ibmcloud/provision\nPROVISION_PAYLOAD=$(cat <<EOJSON\n{\n  \"cluster_id\": \"${CLUSTER_ID}\",\n  \"cluster_name\": \"${CLUSTER_NAME}\",\n  \"cluster_crn\": \"${CLUSTER_CRN}\",\n  \"region\": \"${CLUSTER_REGION}\",\n  \"resource_group\": \"${CLUSTER_RESOURCE_GROUP}\",\n  \"namespace\": \"${JOB_NAMESPACE}\",\n  \"provider\": \"${CLUSTER_PROVIDER}\",\n  \"account_id\": \"${ACCOUNT_ID}\",\n  \"account_name\": \"${ACCOUNT_NAME}\",\n  \"account_type\": \"${ACCOUNT_TYPE}\",\n  \"customer_email\": \"${CUSTOMER_EMAIL}\",\n  \"customer_name\": \"${CUSTOMER_NAME}\",\n  \"customer_iam_id\": \"${CUSTOMER_IAM_ID}\"\n}\nEOJSON\n)\necho \"    URL: POST ${PROVISION_URL}\"\necho \"    Payload:\"\necho \"${PROVISION_PAYLOAD}\"\necho ''\n\nif [ \"${DRY_RUN}\" = true ]; then\n  echo '    [DRY-RUN] Skipping actual API call'\n  echo '    [DRY-RUN] Simulated response: {\"token\": \"hub_xxxxx\"}'\n  HUB_TOKEN='hub_dry_run_placeholder_token'\nelse\n  RESPONSE=$(curl -sf -X POST \"${PROVISION_URL}\" -H 'Content-Type: application/json' -H \"Authorization: Bearer ${IAM_TOKEN}\" -d \"${PROVISION_PAYLOAD}\")\n  echo \"    Response: ${RESPONSE}\"\n  HUB_TOKEN=$(echo \"${RESPONSE}\" | grep -o '\"token\"[[:space:]]*:[[:space:]]*\"[^\"]*\"' | sed 's/\"token\"[[:space:]]*:[[:space:]]*\"//;s/\"$//')\n  if [ -z \"${HUB_TOKEN}\" ]; then\n    echo 'ERROR: Failed to extract token from provisioning response'\n    exit 1\n  fi\nfi\necho ''\n\n# --- Step 4: Create Kubernetes secret ---\necho '==> Step 4: Creating Kubernetes secret'\necho \"    Secret: ${SECRET_NAME}\"\necho \"    Namespace: ${JOB_NAMESPACE}\"\necho \"    Key: token\"\necho ''\n\nif [ \"${DRY_RUN}\" = true ]; then\n  echo '    [DRY-RUN] Would run:'\n  echo \"    kubectl create secret generic ${SECRET_NAME} --namespace=${JOB_NAMESPACE} --from-literal=token=<hub-token>\"\nelse\n  kubectl create secret generic \"${SECRET_NAME}\" --namespace=\"${JOB_NAMESPACE}\" --from-literal=token=\"${HUB_TOKEN}\" --dry-run=client -o yaml | kubectl apply -f -\n  echo '    Secret created successfully'\nfi\necho ''\n\n# --- Step 5: Verify ---\necho '==> Step 5: Verification'\nif [ \"${DRY_RUN}\" = true ]; then\n  echo '    [DRY-RUN] Would run:'\n  echo \"    kubectl get secret ${SECRET_NAME} --namespace=${JOB_NAMESPACE}\"\nelse\n  kubectl get secret \"${SECRET_NAME}\" --namespace=\"${JOB_NAMESPACE}\" -o jsonpath='{.metadata.name}' && echo ' exists'\nfi\necho ''\n\necho '==> Pre-install provisioning complete'",
+      "script_permission": "cluster-admin",
+      "delete_script": "#!/bin/bash\nset -eo pipefail\n\nDRY_RUN=false\nHUB_ADMIN_API=https://admin-api.hub-preview.traefik.io\nSECRET_NAME=traefik-hub-license\n\necho '==> Traefik Hub delete (deprovision) script'\necho \"    Dry-run: ${DRY_RUN}\"\necho ''\n\n# --- Step 1: Gather identifiers ---\necho '==> Step 1: Gathering identifiers'\nCLUSTER_ID=${ID}\nCLUSTER_NAME=${NAME}\nCLUSTER_CRN=${CRN}\nACCOUNT_ID=$(echo \"${CRN}\" | sed 's|.*:a/\\([^:]*\\):.*|\\1|')\nACCOUNT_NAME=$(ibmcloud account show 2>/dev/null | grep 'Account Name:' | sed 's/.*Account Name:[[:space:]]*//')\necho \"    cluster_id:    ${CLUSTER_ID}\"\necho \"    cluster_name:  ${CLUSTER_NAME}\"\necho \"    cluster_crn:   ${CLUSTER_CRN}\"\necho \"    account_id:    ${ACCOUNT_ID}\"\necho \"    account_name:  ${ACCOUNT_NAME}\"\necho \"    namespace:     ${JOB_NAMESPACE}\"\necho ''\n\nIAM_TOKEN=$(ibmcloud iam oauth-tokens 2>/dev/null | grep 'IAM token:' | sed 's/.*Bearer //')\nif [ -z \"${IAM_TOKEN}\" ]; then\n  echo '    ERROR: Could not get IAM token'\n  exit 1\nfi\n\n# --- Step 2: Call hub-admin deprovision endpoint ---\necho '==> Step 2: Deprovisioning workspace via hub-admin API'\nDEPROVISION_URL=${HUB_ADMIN_API}/marketplace/ibmcloud/deprovision\nDEPROVISION_PAYLOAD=$(cat <<EOJSON\n{\n  \"cluster_id\": \"${CLUSTER_ID}\",\n  \"cluster_name\": \"${CLUSTER_NAME}\",\n  \"cluster_crn\": \"${CLUSTER_CRN}\",\n  \"account_id\": \"${ACCOUNT_ID}\",\n  \"account_name\": \"${ACCOUNT_NAME}\",\n  \"namespace\": \"${JOB_NAMESPACE}\"\n}\nEOJSON\n)\necho \"    URL: POST ${DEPROVISION_URL}\"\necho \"    Payload:\"\necho \"${DEPROVISION_PAYLOAD}\"\necho ''\n\nif [ \"${DRY_RUN}\" = true ]; then\n  echo '    [DRY-RUN] Skipping actual API call'\nelse\n  curl -sf -X POST \"${DEPROVISION_URL}\" -H 'Content-Type: application/json' -H \"Authorization: Bearer ${IAM_TOKEN}\" -d \"${DEPROVISION_PAYLOAD}\" || echo '    WARNING: Deprovision call failed (non-fatal)'\nfi\necho ''\n\n# --- Step 3: Delete Kubernetes secret ---\necho '==> Step 3: Deleting Kubernetes secret'\nif [ \"${DRY_RUN}\" = true ]; then\n  echo '    [DRY-RUN] Would run:'\n  echo \"    kubectl delete secret ${SECRET_NAME} --namespace=${JOB_NAMESPACE} --ignore-not-found\"\nelse\n  kubectl delete secret \"${SECRET_NAME}\" --namespace=\"${JOB_NAMESPACE}\" --ignore-not-found\n  echo '    Secret deleted'\nfi\necho ''\n\necho '==> Delete script complete'",
+      "scope": "namespace"
+    }
+  ],
+  "configuration": [
+    {
+      "key": "cluster",
+      "type": "string",
+      "default_value": "",
+      "required": true,
+      "hidden": false,
+      "custom_config": {
+        "type": "cluster",
+        "grouping": "target",
+        "grouping_index": 1,
+        "config_constraints": {
+          "clusterType": "kubernetes"
+        }
+      }
+    },
+    {
+      "key": "namespace",
+      "type": "string",
+      "default_value": "",
+      "required": true,
+      "hidden": false,
+      "custom_config": {
+        "type": "cluster_namespace",
+        "grouping": "target",
+        "grouping_index": 2,
+        "config_constraints": {
+          "clusterType": "kubernetes"
+        }
+      }
+    },
+    {
+      "key": "hub.token",
+      "type": "string",
+      "default_value": "traefik-hub-license",
+      "required": false,
+      "hidden": true,
+      "description": "Name of the Kubernetes secret containing the Traefik Hub license token"
+    },
+    {
+      "key": "hub.apimanagement.enabled",
+      "type": "boolean",
+      "default_value": true,
+      "required": false,
+      "hidden": false,
+      "description": "Enable Traefik Hub API Management"
+    },
+    {
+      "key": "image.registry",
+      "type": "string",
+      "default_value": "ghcr.io",
+      "required": false,
+      "hidden": true,
+      "description": "Traefik Hub image registry"
+    },
+    {
+      "key": "image.repository",
+      "type": "string",
+      "default_value": "traefik/traefik-hub",
+      "required": false,
+      "hidden": true,
+      "description": "Traefik Hub image repository"
+    },
+    {
+      "key": "image.tag",
+      "type": "string",
+      "default_value": "v3.19.0",
+      "required": false,
+      "hidden": false,
+      "description": "Traefik Hub image tag"
+    }
+  ]
+}
